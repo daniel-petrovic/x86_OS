@@ -6,5 +6,5 @@ all:
 
 .PHONY: clean
 
-.clean:
+clean:
 	rm -f boot.bin
