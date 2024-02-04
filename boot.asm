@@ -13,20 +13,6 @@ nop
 times 36 db 0 ; 36 = 32(==last offset) + 4(size on offset 32), see BPB description
 ; End BPB
 
-handle_interrupt_0:
-	mov ah, 0eh
-	mov al, 'A'
-	mov bx, 0x00
-	int 0x10
-	iret
-
-handle_interrupt_1:
-	mov ah, 0eh
-	mov al, 'V'
-	mov bx, 0x00
-	int 0x10
-	iret
-
 start:
 	;;;;;;;;;;;;
 	; RAM
@@ -60,18 +46,44 @@ start:
     sti                 ; set interrupt flag -> enable interrupts
     ; The segment registers are now set
 
-	mov word[ss:0x00], handle_interrupt_0 ; write interrupt(0) offset
-	mov word[ss:0x02], 0x7c0				 ; write interrupt(0) segment
-
-	mov word[ss:0x04], handle_interrupt_1	; write interrupt(1) offset
-	mov word[ss:0x06], 0x7c0
-
-	int 0	; trigger interrupt(0)
-	int 1	; trigger interrupt(1)
-	
     mov si, message
     call print_message
+
+	; load next sector (sector == 2)
+	; BIOS Int 0x13/AH=02h : DISK - READ SECTORS INTO MEMORY: https://web.archive.org/web/20191111094211/http://www.ctyme.com/intr/rb-0607.htm
+	;AH = 02h
+	;AL = number of sectors to read (must be nonzero)
+	;CH = low eight bits of cylinder number
+	;CL = sector number 1-63 (bits 0-5)
+	;high two bits of cylinder (bits 6-7, hard disk only)
+	;DH = head number
+	;DL = drive number (bit 7 set for hard disk)
+	;ES:BX -> data buffer
+
+	;Return:
+	;CF set on error
+	;if AH = 11h (corrected ECC error), AL = burst length
+	;CF clear if successful
+	;AH = status (see #00234)
+	;AL = number of sectors transferred (only valid if CF set for some
+	;BIOSes)
+	mov ah, 02h
+	mov al, 1		; number of sectors to read
+	mov ch, 0		; low eight bits of cylinder number
+	mov cl, 2		; sector number 
+	mov dh, 0		; head number
+	; dl == drive number is already set by the BIOS
+	mov bx, buffer
+	int 0x13
+	jc error
+	mov si, buffer	; try print out the buffer we loaded
+	call print_message
     jmp $
+
+error:
+	mov si, error_message
+	call print_message
+	jmp $
 
 print_message:
     mov bx, 0
@@ -90,6 +102,7 @@ print_char:
     ret
 
 message db 'Starting barebone x86 OS in real mode ...', 0
+error_message db 'Failed to load sector', 0
 
 times 510 - ($ - $$) db 0
 
@@ -99,3 +112,5 @@ db 0xAA
 ;;;;;;;;;;;
 ; End MBR
 ;;;;;;;;;;;
+
+buffer:
