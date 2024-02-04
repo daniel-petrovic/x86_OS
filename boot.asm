@@ -5,9 +5,32 @@
 ORG 0
 BITS 16
 
-jmp 0x7c0:start
+;jmp 0x7c0:start
+; Start BPB (BIOS Parameter Block)
+; see https://wiki.osdev.org/FAT
+jmp short start
+nop
+times 36 db 0 ; 36 = 32(==last offset) + 4(size on offset 32), see BPB description
+; End BPB
+
+handle_interrupt_0:
+	mov ah, 0eh
+	mov al, 'A'
+	mov bx, 0x00
+	int 0x10
+	iret
+
+handle_interrupt_1:
+	mov ah, 0eh
+	mov al, 'V'
+	mov bx, 0x00
+	int 0x10
+	iret
 
 start:
+	;;;;;;;;;;;;
+	; RAM
+	;;;;;;;;;;;;
     ;.
     ;.
     ;.
@@ -24,7 +47,7 @@ start:
     ;.
     ;.
     ;.
-    ;0x00 = SS
+    ;0x00 = SS -> here the IVT (Interrupt Vector Table will be loaded) (see IVT: https://wiki.osdev.org/IVT)
 
     cli                 ; clear interrupt flag -> disables interrupts
     mov ax, 0x7c0       ; for CS, DS segments
@@ -36,6 +59,16 @@ start:
     mov sp, 0x7c00
     sti                 ; set interrupt flag -> enable interrupts
     ; The segment registers are now set
+
+	mov word[ss:0x00], handle_interrupt_0 ; write interrupt(0) offset
+	mov word[ss:0x02], 0x7c0				 ; write interrupt(0) segment
+
+	mov word[ss:0x04], handle_interrupt_1	; write interrupt(1) offset
+	mov word[ss:0x06], 0x7c0
+
+	int 0	; trigger interrupt(0)
+	int 1	; trigger interrupt(1)
+	
     mov si, message
     call print_message
     jmp $
