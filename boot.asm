@@ -2,21 +2,24 @@
 ; Start MBR
 ;;;;;;;;;;;
 ; We are in REAL mode here, using CS,DS,ES,SS segment registers for addressing
-ORG 0
+ORG 0x7c00  ; ORG=0x7c00 needed (instead of 0) for set gdt entries correctly further below
 BITS 16
+
+CODE_SEG equ gdt_code - gdt_start
+DATA_SEG equ gdt_data - gdt_start
 
 ;jmp 0x7c0:start
 ; Start BPB (BIOS Parameter Block)
 ; see https://wiki.osdev.org/FAT
-jmp short start
+jmp 0:start
 nop
 times 36 db 0 ; 36 = 32(==last offset) + 4(size on offset 32), see BPB description
 ; End BPB
 
 start:
-	;;;;;;;;;;;;
-	; RAM
-	;;;;;;;;;;;;
+    ;;;;;;;;;;;;
+    ; RAM
+    ;;;;;;;;;;;;
     ;.
     ;.
     ;.
@@ -36,11 +39,9 @@ start:
     ;0x00 = SS -> here the IVT (Interrupt Vector Table will be loaded) (see IVT: https://wiki.osdev.org/IVT)
 
     cli                 ; clear interrupt flag -> disables interrupts
-    mov ax, 0x7c0       ; for CS, DS segments
+    mov ax, 0x0       ; for CS, DS segments
     mov ds, ax          ; set data segment
     mov es, ax          ; set extra segment
-
-    mov ax, 0x00        ; for SS segment
     mov ss, ax
     mov sp, 0x7c00
     sti                 ; set interrupt flag -> enable interrupts
@@ -49,41 +50,42 @@ start:
     mov si, message
     call print_message
 
-	; load next sector (sector == 2)
-	; BIOS Int 0x13/AH=02h : DISK - READ SECTORS INTO MEMORY: https://web.archive.org/web/20191111094211/http://www.ctyme.com/intr/rb-0607.htm
-	;AH = 02h
-	;AL = number of sectors to read (must be nonzero)
-	;CH = low eight bits of cylinder number
-	;CL = sector number 1-63 (bits 0-5)
-	;high two bits of cylinder (bits 6-7, hard disk only)
-	;DH = head number
-	;DL = drive number (bit 7 set for hard disk)
-	;ES:BX -> data buffer
+.load_protected: ; Switch to protected mode: https://wiki.osdev.org/Protected_Mode
+    cli
+    lgdt [gdt_descriptor]
+    mov eax, cr0
+    or eax, 0x1         ; Set PE (Protection Enable Bit)
+    mov cr0, eax
+    jmp CODE_SEG:load32
 
-	;Return:
-	;CF set on error
-	;if AH = 11h (corrected ECC error), AL = burst length
-	;CF clear if successful
-	;AH = status (see #00234)
-	;AL = number of sectors transferred (only valid if CF set for some
-	;BIOSes)
-	mov ah, 02h
-	mov al, 1		; number of sectors to read
-	mov ch, 0		; low eight bits of cylinder number
-	mov cl, 2		; sector number 
-	mov dh, 0		; head number
-	; dl == drive number is already set by the BIOS
-	mov bx, buffer
-	int 0x13
-	jc error
-	mov si, buffer	; try print out the buffer we loaded
-	call print_message
-    jmp $
+; Global Descriptor Table (GDT): https://wiki.osdev.org/Global_Descriptor_Table
+gdt_start:
+gdt_null: ; Null GDT Entry - required
+    dd 0x0
+    dd 0x0
 
-error:
-	mov si, error_message
-	call print_message
-	jmp $
+; offset 0x8 - code segment
+gdt_code:       ; CS should point to this       
+    dw 0xffff   ; Segment limit first 0-15 bits
+    dw 0        ; Base first 0-15 bits
+    dw 0        ; Base 16-23 bits
+                ;                    Pr  Privl  S   Ex  DC  RW  A                               
+    db 0x9a     ; Access byte 0x9a = 1    0 0   1   1   0   1   0
+    db 11001111b ; High 4 bit flags and the low 4 bit flags
+
+; offset 0x10 - data segment
+gdt_data:       ; DS,SS,ES,FS,GS    
+    dw 0xffff   ; Segment limit first 0-15 bits
+    dw 0        ; Base first 0-15 bits
+    dw 0        ; Base 16-23 bits
+                ;                    Pr  Privl  S   Ex  DC  RW  A                               
+    db 0x92     ; Access byte 0x9a = 1    0 0   1   0   0   1   0
+    db 11001111b ; High 4 bit flags and the low 4 bit flags
+
+gdt_end:
+gdt_descriptor:
+    dw gdt_end - gdt_start - 1
+    dd gdt_start
 
 print_message:
     mov bx, 0
@@ -102,7 +104,18 @@ print_char:
     ret
 
 message db 'Starting barebone x86 OS in real mode ...', 0
-error_message db 'Failed to load sector', 0
+
+[BITS 32]
+load32:
+    mov ax, DATA_SEG
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    mov ebp, 0x00200000
+    mov esp, ebp
+    jmp $
 
 times 510 - ($ - $$) db 0
 
